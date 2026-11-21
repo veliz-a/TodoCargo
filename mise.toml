@@ -1,0 +1,36 @@
+[tools]
+python = "3.12"
+uv = "latest"
+cloudflared = "latest"
+
+[env]
+_.python.venv = { path = ".venv", create = true }
+_.file = ".env"
+
+[tasks.dev]
+description = "Servidor de desarrollo"
+run = "python manage.py runserver 0.0.0.0:8000"
+
+[tasks.start]
+description = "Servidor de producción (gunicorn)"
+run = "gunicorn config.wsgi --bind 0.0.0.0:${PORT:-8000}"
+
+[tasks.migrate]
+run = "python manage.py migrate"
+
+[tasks.collectstatic]
+run = "python manage.py collectstatic --noinput"
+
+[tasks.test]
+run = "pytest"
+
+[tasks.lint]
+run = "ruff check . && ruff format --check ."
+
+[tasks.formato]
+description = "Formatear y corregir con ruff"
+run = "ruff format . && ruff check --fix ."
+
+[tasks.tunel]
+description = "URL pública temporal hacia el servidor local"
+run = "cloudflared tunnel --url http://localhost:8000"

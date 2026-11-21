@@ -1,0 +1,84 @@
+# Integración continua: se ejecuta en cada push a main y en cada pull request.
+# Si falla, el cambio no debe fusionarse ni desplegarse al entorno de pruebas.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancela ejecuciones anteriores de la misma rama para no gastar minutos.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Estilo y errores básicos con ruff. Es rápido, así que falla temprano.
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Instala las mismas versiones que en local según mise.toml.
+      # Solo python y uv: cloudflared (túnel) no se necesita en CI.
+      - uses: jdx/mise-action@v2
+        with:
+          install_args: python uv
+
+      - name: Instalar dependencias
+        run: uv sync --frozen
+
+      - name: Revisar código y formato
+        run: mise run lint
+
+  # Pruebas contra PostgreSQL real, igual que en los entornos públicos.
+  # Las reglas críticas (sin sobreventa de cupos, reservas dentro de la carga)
+  # dependen del comportamiento de PostgreSQL, por eso no se usa SQLite.
+  pruebas:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: todocargo
+          POSTGRES_PASSWORD: todocargo
+          POSTGRES_DB: todocargo
+        ports:
+          - 5432:5432
+        # Espera a que PostgreSQL esté listo antes de correr las pruebas.
+        options: >-
+          --health-cmd "pg_isready -U todocargo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://todocargo:todocargo@localhost:5432/todocargo
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          install_args: python uv
+
+      - name: Instalar dependencias
+        run: uv sync --frozen
+
+      # Falla si alguien cambió un modelo y olvidó crear la migración.
+      - name: Verificar migraciones pendientes
+        run: python manage.py makemigrations --check --dry-run
+
+      - name: Ejecutar pruebas
+        run: pytest --create-db
+
+      # Revisa la configuración de producción (HTTPS, cookies seguras, etc.)
+      # con valores ficticios; --fail-level ERROR solo falla ante errores,
+      # no ante avisos opcionales como HSTS preload.
+      - name: Verificar configuración de producción
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings.produccion
+          SECRET_KEY: clave-ficticia-solo-para-ci-0123456789-abcdefghijklmnopqrstuvwxyz
+          ALLOWED_HOSTS: ejemplo.com
+        run: python manage.py check --deploy --fail-level ERROR
